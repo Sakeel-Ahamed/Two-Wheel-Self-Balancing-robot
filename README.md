@@ -1,4 +1,4 @@
-# Two-Wheel Self-Balancing Robot with LiDAR Obstacle Detection and Autonomous Navigation
+# Two-Wheel Self-Balancing Robot 
 
 ## Introduction
 
@@ -79,12 +79,12 @@ Where:
 
 ### Obstacle Avoidance Logic
 
-The LD06 scans a 360° field and segments it by angle. If any object is detected within a critical distance (e.g., < 40cm) in the forward region (e.g., 0–30° or 330–360°), a STOP or AVOID command is sent to the main controller.
+The LD06 scans a 360° field and segments it by angle. If any object is detected within a critical distance (e.g., < 40cm) appropriate commands are sent to the main ESP32
 
 The robot checks:
 ```cpp
-if (distance[i] < threshold && angle[i] within forward sector) {
-    sendStopCommand();
+if (distance[i] < threshold && angle[i]) {
+    alertMainESP32();
 }
 ```
 
