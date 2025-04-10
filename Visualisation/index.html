@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Robot Position Plotter with Adaptive Target Updates</title>
+    <style>
+      /* Import Google Font "Roboto" */
+      @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap');
+
+      html, body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        font-family: 'Roboto', sans-serif;
+        background: linear-gradient(135deg, #74ebd5, #ACB6E5);
+      }
+      
+      /* Mode selection overlay (centered) */
+      #modeSelection {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.8);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+      }
+      #modeSelection div {
+        text-align: center;
+        background: #fff;
+        padding: 20px 40px;
+        border-radius: 10px;
+      }
+      #modeSelection button {
+        margin: 10px;
+        padding: 10px 20px;
+        font-size: 16px;
+        cursor: pointer;
+        border: none;
+        border-radius: 8px;
+        transition: background 0.3s ease, transform 0.2s ease;
+      }
+      #modeSelection button:hover {
+        transform: translateY(-2px);
+      }
+      
+      /* Button Styles */
+      button {
+        padding: 10px 20px;
+        font-size: 16px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: background 0.3s ease, transform 0.2s ease;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        display: inline-flex;
+        align-items: center;
+      }
+      #connect {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        background: #28a745;
+        color: #fff;
+      }
+      #connect:hover {
+        background: #218838;
+        transform: translateY(-2px);
+      }
+      #drawRoute {
+        position: absolute;
+        top: 20px;
+        left: 200px;
+        background: #007bff;
+        color: #fff;
+      }
+      #drawRoute:hover {
+        background: #0069d9;
+        transform: translateY(-2px);
+      }
+      #toggleInfo {
+        position: absolute;
+        top: 20px;
+        left: 350px;
+        background: #6c757d;
+        color: #fff;
+      }
+      #toggleInfo:hover {
+        background: #5a6268;
+        transform: translateY(-2px);
+      }
+      /* Full Screen button placed in bottom right corner */
+      #fullScreen {
+        position: absolute;
+        bottom: 20px;
+        right: 20px;
+        background: #6c757d;
+        color: #fff;
+      }
+      #fullScreen:hover {
+        background: #5a6268;
+        transform: translateY(-2px);
+      }
+      
+      /* Info Panels */
+      #output, #angleDisplay, #timer {
+        position: absolute;
+        padding: 10px 20px;
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 8px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+        font-size: 16px;
+        color: #333;
+      }
+      #output {
+        top: 20px;
+        right: 20px;
+      }
+      #angleDisplay {
+        bottom: 20px;
+        left: 20px;
+        font-size: 18px;
+        font-weight: 500;
+      }
+      #timer {
+        top: 20px;
+        left: 480px;
+        font-size: 18px;
+        font-weight: 500;
+        display: none;
+      }
+      
+      /* Canvas */
+      canvas {
+        display: block;
+        margin: 0 auto;
+        border: 2px solid rgba(255, 255, 255, 0.8);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Mode selection overlay -->
+    <div id="modeSelection">
+      <div>
+        <h2>Select Mode</h2>
+        <button id="connectMode">Real Robot</button>
+        <button id="simulateMode">Simulation</button>
+      </div>
+    </div>
+    
+    <button id="connect">Connect to Robot</button>
+    <button id="drawRoute">Start Drawing</button>
+    <button id="toggleInfo">Hide Info</button>
+    <div id="output">Status: Disconnected</div>
+    <div id="angleDisplay">Target Angle: 0.00 | Yaw: 0.00° | Obstacle: (0.00, 0.00)</div>
+    <div id="timer">Unit: 0</div>
+    <canvas id="plot"></canvas>
+    <button id="fullScreen">
+      <!-- Full Screen Icon: four outward arrows -->
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="4 9 4 4 9 4"></polyline>
+        <polyline points="15 4 20 4 20 9"></polyline>
+        <polyline points="4 15 4 20 9 20"></polyline>
+        <polyline points="15 20 20 20 20 15"></polyline>
+      </svg>
+    </button>
+    
+    <script>
+      // Global simulation flag and variables
+      let simulateMode = false;
+      let simulationInterval;
+      let obstacleSimulated = false;
+      // Global hover coordinates updated by mouse movement over the canvas.
+      let hoverX = 0, hoverY = 0;
+      
+      // BLE service/characteristic UUIDs
+      const SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0";
+      const CHARACTERISTIC_UUID = "87654321-4321-6789-4321-abcdef012345";
+      
+      let device, server, service, characteristic;
+      let posX = 0, posY = 0, targetX = 0, targetY = 0, avgVel = 0, targetAngle = 0, yaw = 0;
+      let gap = 5.0;
+      let obstacles = [];
+      let pathPoints = [];
+      const maxTraceLength = 200;
+      
+      // Variables for obstacle detour route
+      let inDetour = false;
+      let detourRoute = [];
+      let detourIndex = 0;
+      // If the robot was following a drawn route, save it so we can resume after the detour.
+      let savedFollowPoints = [];
+      let savedFollowIndex = 0;
+      
+      const canvas = document.getElementById("plot");
+      const ctx = canvas.getContext("2d");
+      
+      let centerX = 0, centerY = 0;
+      let lastUpdate = 0;
+      const updateInterval = 250;
+      const scale = 20; // 20 pixels per world unit
+      
+      // Normal target update variables
+      let targetUpdatingEnabled = false;
+      let lastSentTargetX = targetX;
+      let lastSentTargetY = targetY;
+      const targetUpdateThreshold = 5.0;
+      
+      // Variables for drawing & following a route
+      let isDrawing = false;   // true when drawing mode is active
+      let isMouseDown = false; // for drawing mode
+      let drawnRoute = [];     // recorded points (world coordinates)
+      let followPoints = [];   // interpolated points (~1.0 unit apart)
+      let following = false;
+      let followIndex = 0;
+      let followTimer = null;
+      
+      // Timer display element (shows current unit count)
+      const timerEl = document.getElementById("timer");
+      
+      function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        centerX = canvas.width / 2;
+        centerY = canvas.height / 2;
+      }
+      window.addEventListener("resize", resizeCanvas);
+      resizeCanvas();
+      
+      // Redraw canvas when fullscreen changes
+      document.addEventListener("fullscreenchange", function() {
+        resizeCanvas();
+        drawPosition();
+      });
+      
+      // Always update hoverX and hoverY based on current mouse position
+      canvas.addEventListener("mousemove", function(e) {
+        let rect = canvas.getBoundingClientRect();
+        let x = e.clientX - rect.left;
+        let y = e.clientY - rect.top;
+        hoverX = (x - centerX) / scale;
+        hoverY = (y - centerY) / scale;
+      });
+      
+      function drawPosition() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Draw dashed grid lines
+        ctx.strokeStyle = "#888";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 3]);
+        ctx.beginPath();
+        ctx.moveTo(0, centerY);
+        ctx.lineTo(canvas.width, centerY);
+        ctx.moveTo(centerX, 0);
+        ctx.lineTo(centerX, canvas.height);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        // Draw the drawn route (if any) in orange first (in background)
+        if (drawnRoute.length > 0) {
+          ctx.beginPath();
+          ctx.strokeStyle = "orange";
+          ctx.lineWidth = 3;
+          for (let i = 0; i < drawnRoute.length; i++) {
+            let pt = drawnRoute[i];
+            let x = centerX + pt.x * scale;
+            let y = centerY + pt.y * scale;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+        
+        // Draw robot's past path (blue polyline) on top
+        if (pathPoints.length > 1) {
+          ctx.beginPath();
+          ctx.strokeStyle = "blue";
+          ctx.lineWidth = 2;
+          for (let i = 0; i < pathPoints.length; i++) {
+            let pt = pathPoints[i];
+            let x = centerX + pt.x * scale;
+            let y = centerY + pt.y * scale;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+        
+        // Draw target marker (green) with shadow
+        let canvasTargetX = centerX + targetX * scale;
+        let canvasTargetY = centerY + targetY * scale;
+        ctx.save();
+        ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(canvasTargetX, canvasTargetY, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = "green";
+        ctx.fill();
+        ctx.restore();
+        
+        // Draw current robot position marker (red) with shadow
+        let canvasPosX = centerX + posX * scale;
+        let canvasPosY = centerY + posY * scale;
+        ctx.save();
+        ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(canvasPosX, canvasPosY, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = "red";
+        ctx.fill();
+        ctx.restore();
+        
+        // Draw coordinate labels with text shadow
+        ctx.fillStyle = "black";
+        ctx.font = "14px 'Roboto', sans-serif";
+        ctx.shadowColor = "rgba(255,255,255,0.8)";
+        ctx.shadowBlur = 2;
+        ctx.fillText(`Pos: (${posX.toFixed(2)}, ${posY.toFixed(2)})`, canvasPosX + 10, canvasPosY - 10);
+        ctx.fillText(`Target: (${targetX.toFixed(2)}, ${targetY.toFixed(2)})`, canvasTargetX + 10, canvasTargetY - 10);
+        ctx.shadowBlur = 0;
+        
+        // // In simulation mode, if a detour is active, show an "o" near the obstacle location.
+        // if (simulateMode && inDetour && obstacles.length > 0) {
+        //   let obst = obstacles[obstacles.length - 1];
+        //   let canvasObstX = centerX + obst.x * scale;
+        //   let canvasObstY = centerY + obst.y * scale;
+        //   ctx.fillStyle = "black";
+        //   ctx.font = "20px 'Roboto'";
+        //   ctx.fillText("o", canvasObstX + 10, canvasObstY - 10);
+        // }
+      }
+      
+      function sendTarget() {
+        let newTargetAngle = 0.00;
+        let command = "T," + targetX.toFixed(2) + "," + targetY.toFixed(2) + "," + newTargetAngle.toFixed(2);
+        let data = new TextEncoder().encode(command);
+        if (characteristic) {
+          characteristic.writeValue(data)
+            .then(() => console.log("New target sent: " + command))
+            .catch(error => console.error("BLE write error: ", error));
+        }
+      }
+      
+      // BLE connection for normal mode remains unchanged.
+      document.getElementById("connect").addEventListener("click", function() {
+        if (simulateMode) return; // disable BLE connect in simulation mode
+        navigator.bluetooth.requestDevice({
+          filters: [{ services: [SERVICE_UUID] }]
+        })
+        .then(dev => {
+          device = dev;
+          document.getElementById("output").textContent = "Status: Connecting...";
+          return device.gatt.connect();
+        })
+        .then(gattServer => {
+          server = gattServer;
+          return server.getPrimaryService(SERVICE_UUID);
+        })
+        .then(svc => {
+          service = svc;
+          return service.getCharacteristic(CHARACTERISTIC_UUID);
+        })
+        .then(char => {
+          characteristic = char;
+          return characteristic.startNotifications();
+        })
+        .then(() => {
+          document.getElementById("output").textContent = "Status: Connected";
+          characteristic.addEventListener("characteristicvaluechanged", handleNotification);
+        })
+        .catch(error => {
+          console.error("BLE error:", error);
+          document.getElementById("output").textContent = "BLE error: " + error;
+        });
+      });
+      
+      function handleNotification(event) {
+        let now = Date.now();
+        if (now - lastUpdate < updateInterval) return;
+        lastUpdate = now;
+        let decoder = new TextDecoder("utf-8");
+        let data = decoder.decode(event.target.value).trim();
+        console.log("Raw data received:", data);
+        let parts = data.split(",");
+        if (parts.length >= 9) {
+          posX = parseFloat(parts[0]);
+          posY = parseFloat(parts[1]);
+          if (!following && !inDetour) {
+            targetX = parseFloat(parts[2]);
+            targetY = parseFloat(parts[3]);
+            lastSentTargetX = targetX;
+            lastSentTargetY = targetY;
+          }
+          avgVel = parseFloat(parts[4]);
+          targetAngle = parseFloat(parts[5]);
+          let receivedObstX = parseFloat(parts[6]);
+          let receivedObstY = parseFloat(parts[7]);
+          yaw = parseFloat(parts[8]);
+          
+          // Normal obstacle handling (BLE notifications)
+          if ((receivedObstX !== 0 || receivedObstY !== 0) && !inDetour) {
+            obstacles.push({ x: receivedObstX, y: receivedObstY, observedYaw: yaw });
+            if (following) {
+              savedFollowPoints = followPoints;
+              savedFollowIndex = followIndex;
+              following = false;
+              clearInterval(followTimer);
+            }
+            
+            // For BLE obstacles, compute the heading from pathPoints.
+            let directionTheta;
+            if (pathPoints.length >= 2) {
+              let lastIdx = pathPoints.length - 1;
+              let secondLastIdx = pathPoints.length - 2;
+              let dx = pathPoints[lastIdx].x - pathPoints[secondLastIdx].x;
+              let dy = pathPoints[lastIdx].y - pathPoints[secondLastIdx].y;
+              directionTheta = Math.atan2(dy, dx);
+            } else {
+              directionTheta = yaw * Math.PI / 180;
+            }
+            
+            // Base is current robot position.
+            let baseX = posX;
+            let baseY = posY;
+            
+            let backDistance = 6.0;
+            let lateralOffset = 6.0;
+            let frontDistance = 6.0;
+            let diagDistance = 6.0;
+            let finalAngle = directionTheta + Math.PI / 4;
+            
+            let backPoint = {
+              x: baseX - backDistance * Math.cos(directionTheta),
+              y: baseY - backDistance * Math.sin(directionTheta)
+            };
+            let leftPoint = {
+              x: baseX + lateralOffset * Math.sin(directionTheta),
+              y: baseY - lateralOffset * Math.cos(directionTheta)
+            };
+            let forwardPoint = {
+              x: leftPoint.x + frontDistance * Math.cos(directionTheta),
+              y: leftPoint.y + frontDistance * Math.sin(directionTheta)
+            };
+            let angledRight = {
+              x: forwardPoint.x + diagDistance * Math.cos(finalAngle),
+              y: forwardPoint.y + diagDistance * Math.sin(finalAngle)
+            };
+            
+            detourRoute = [backPoint, leftPoint, forwardPoint, angledRight];
+            detourIndex = 0;
+            inDetour = true;
+            targetX = detourRoute[0].x;
+            targetY = detourRoute[0].y;
+            sendTarget();
+            console.log("Detour initiated (BLE). New target:", targetX, targetY);
+          }
+          
+          pathPoints.push({ x: posX, y: posY });
+          // if (pathPoints.length > maxTraceLength) {
+          //   pathPoints.shift();
+          // }
+          drawPosition();
+          document.getElementById("angleDisplay").textContent =
+            "Target Angle: " + targetAngle.toFixed(2) +
+            " | Yaw: " + yaw.toFixed(2) + "°" +
+            " | Last Obstacle: " + (obstacles.length > 0 
+                ? "(" + obstacles[obstacles.length - 1].x.toFixed(2) + ", " + obstacles[obstacles.length - 1].y.toFixed(2) + ")"
+                : "(0.00, 0.00)");
+          
+          if (inDetour) {
+            checkDetour();
+          }
+        } else {
+          console.warn("Data format unexpected:", data);
+        }
+      }
+      
+      function checkDetour() {
+        const obstacleThreshold = 0.5;
+        const dx = detourRoute[detourIndex].x - posX;
+        const dy = detourRoute[detourIndex].y - posY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance < obstacleThreshold) {
+          if (detourIndex < detourRoute.length - 1) {
+            detourIndex++;
+            targetX = detourRoute[detourIndex].x;
+            targetY = detourRoute[detourIndex].y;
+            sendTarget();
+            console.log("Detour target updated to:", targetX, targetY);
+          } else {
+            inDetour = false;
+            console.log("Detour complete, resuming normal operation.");
+            if (savedFollowPoints.length > 0) {
+              following = true;
+              followPoints = savedFollowPoints;
+              followIndex = savedFollowIndex;
+              savedFollowPoints = [];
+              savedFollowIndex = 0;
+              followTimer = setInterval(checkAndUpdateTarget, 250);
+            }
+          }
+        }
+      }
+      
+      // --- Simulation Mode Code ---
+      // In simulation mode, we simulate movement.
+      function simulationLoop() {
+        if (inDetour) {
+          // Move toward the current detour target.
+          let dx = targetX - posX;
+          let dy = targetY - posY;
+          let dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > 0.1) {
+            posX += dx * 0.1;
+            posY += dy * 0.1;
+          }
+          checkDetour();
+        } else {
+          // Normal simulation movement toward the target.
+          let dx = targetX - posX;
+          let dy = targetY - posY;
+          let dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > 0.1) {
+            posX += dx * 0.1;
+            posY += dy * 0.1;
+          }
+        }
+        pathPoints.push({ x: posX, y: posY });
+        // if (pathPoints.length > maxTraceLength) {
+        //   pathPoints.shift();
+        // }
+        drawPosition();
+        document.getElementById("angleDisplay").textContent =
+          "Target Angle: " + targetAngle.toFixed(2) +
+          " | Yaw: " + yaw.toFixed(2) + "°" +
+          " | Obstacle: " + (inDetour ? "detouring" : "none");
+      }
+      
+      function startSimulation() {
+        // Disable BLE connect button in simulation mode.
+        document.getElementById("connect").disabled = true;
+        // Initialize positions.
+        posX = 0;
+        posY = 0;
+        // For simulation, set the default target to (0, 0)
+        targetX = 0;
+        targetY = 0;
+        simulationInterval = setInterval(simulationLoop, updateInterval);
+      }
+      
+      // --- Mode Selection Overlay Handlers ---
+      document.getElementById("connectMode").addEventListener("click", function() {
+        document.getElementById("modeSelection").remove();
+      });
+      document.getElementById("simulateMode").addEventListener("click", function() {
+        simulateMode = true;
+        document.getElementById("modeSelection").remove();
+        startSimulation();
+      });
+      
+      // --- Drawing & Following a Route ---
+      document.getElementById("drawRoute").addEventListener("click", function() {
+        isDrawing = true;
+        drawnRoute = [];
+        targetUpdatingEnabled = false;
+        timerEl.textContent = "Unit: 0";
+        timerEl.style.display = "block";
+        console.log("Drawing mode activated. Hold down left mouse button to draw; press Space to finalize and start plotting.");
+      });
+      
+      canvas.addEventListener("mousedown", function(e) {
+        if (isDrawing) {
+          isMouseDown = true;
+          recordDrawingPoint(e);
+          drawPosition();
+          return;
+        }
+        targetUpdatingEnabled = true;
+        let rect = canvas.getBoundingClientRect();
+        let clickX = e.clientX - rect.left;
+        let clickY = e.clientY - rect.top;
+        let newTargetX = (clickX - centerX) / scale;
+        let newTargetY = (clickY - centerY) / scale;
+        targetX = newTargetX;
+        targetY = newTargetY;
+        lastSentTargetX = newTargetX;
+        lastSentTargetY = newTargetY;
+        drawPosition();
+        if (!simulateMode) sendTarget();
+      });
+      
+      canvas.addEventListener("mousemove", function(e) {
+        if (isDrawing && isMouseDown) {
+          recordDrawingPoint(e);
+          drawPosition();
+        }
+      });
+      
+      canvas.addEventListener("mouseup", function(e) {
+        if (isDrawing) {
+          isMouseDown = false;
+        }
+      });
+      
+      function recordDrawingPoint(e) {
+        let rect = canvas.getBoundingClientRect();
+        let x = e.clientX - rect.left;
+        let y = e.clientY - rect.top;
+        let worldX = (x - centerX) / scale;
+        let worldY = (y - centerY) / scale;
+        if (drawnRoute.length === 0) {
+          drawnRoute.push({ x: worldX, y: worldY });
+          console.log("Recorded point:", worldX, worldY);
+        } else {
+          let lastPoint = drawnRoute[drawnRoute.length - 1];
+          let dx = worldX - lastPoint.x;
+          let dy = worldY - lastPoint.y;
+          let dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist >= gap) {
+            drawnRoute.push({ x: worldX, y: worldY });
+            console.log("Recorded point:", worldX, worldY);
+          } else {
+            console.log("Point too close, not recorded.");
+          }
+        }
+      }
+      
+      function generateFollowPoints(route, spacing) {
+        let points = [];
+        if (route.length === 0) return points;
+        points.push(route[0]);
+        for (let i = 0; i < route.length - 1; i++) {
+          let start = route[i];
+          let end = route[i+1];
+          let dx = end.x - start.x;
+          let dy = end.y - start.y;
+          let d = Math.sqrt(dx * dx + dy * dy);
+          if (d === 0) continue;
+          let numSegments = Math.floor(d / spacing);
+          for (let j = 1; j <= numSegments; j++) {
+            let t = (j * spacing) / d;
+            if (t < 1) {
+              let interpPoint = {
+                x: start.x + t * dx,
+                y: start.y + t * dy
+              };
+              points.push(interpPoint);
+            }
+          }
+        }
+        let last = route[route.length - 1];
+        if (points.length === 0 || (points[points.length - 1].x !== last.x || points[points.length - 1].y !== last.y)) {
+          points.push(last);
+        }
+        return points;
+      }
+      
+      function finalizeDrawing() {
+        isDrawing = false;
+        isMouseDown = false;
+        console.log("Drawing mode ended. Recorded points:", drawnRoute);
+        followPoints = generateFollowPoints(drawnRoute, gap);
+        console.log("Generated follow points:", followPoints);
+        if (followPoints.length > 0) {
+          startFollowing();
+        } else {
+          timerEl.style.display = "none";
+        }
+      }
+      
+      const targetReachedThreshold = 2.0;
+      
+      function checkAndUpdateTarget() {
+        if (inDetour) return;
+        const dx = targetX - posX;
+        const dy = targetY - posY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance < targetReachedThreshold && followIndex < followPoints.length) {
+          targetX = followPoints[followIndex].x;
+          targetY = followPoints[followIndex].y;
+          lastSentTargetX = targetX;
+          lastSentTargetY = targetY;
+          if (!simulateMode) sendTarget();
+          followIndex++;
+          timerEl.textContent = "Unit: " + followIndex;
+          drawPosition();
+        } else if (followIndex >= followPoints.length) {
+          clearInterval(followTimer);
+          following = false;
+          timerEl.textContent += " (Done)";
+        }
+      }
+      
+      function startFollowing() {
+        following = true;
+        followIndex = 0;
+        timerEl.textContent = "Unit: 0";
+        timerEl.style.display = "block";
+        if (followPoints.length > 0) {
+          targetX = followPoints[0].x;
+          targetY = followPoints[0].y;
+          lastSentTargetX = targetX;
+          lastSentTargetY = targetY;
+          if (!simulateMode) sendTarget();
+          followIndex = 1;
+          timerEl.textContent = "Unit: 1";
+          drawPosition();
+        }
+        followTimer = setInterval(checkAndUpdateTarget, 250);
+      }
+      
+      // Extended keydown handler including obstacle trigger using the actual travel direction.
+      document.addEventListener("keydown", function(e) {
+        if (e.code === "Space") {
+          if (isDrawing) {
+            finalizeDrawing();
+          }
+        } else if (e.key === "D" || e.key === "d") {
+          document.getElementById("drawRoute").click();
+        } else if (e.key === "Escape") {
+          if (isDrawing || drawnRoute.length > 0 || following) {
+            isDrawing = false;
+            drawnRoute = [];
+            followPoints = [];
+            if (followTimer) {
+              clearInterval(followTimer);
+              following = false;
+            }
+            timerEl.style.display = "none";
+            console.log("Drawing and route following cleared.");
+            drawPosition();
+          } else {
+            targetUpdatingEnabled = false;
+            console.log("Target updating disabled");
+          }
+        } else if (e.key === "o" || e.key === "O") {
+          // In simulation mode, if the user presses 'o', define a new obstacle.
+          if (simulateMode) {
+            obstacleSimulated = true;
+            // Always record the new obstacle (using current hover coordinates for indication).
+            obstacles.push({ x: hoverX, y: hoverY });
+            
+            // 1) Determine the robot's actual heading based on its recent movement.
+            let directionTheta;
+            if (pathPoints.length >= 2) {
+              let lastIdx = pathPoints.length - 1;
+              let secondLastIdx = pathPoints.length - 2;
+              let dx = pathPoints[lastIdx].x - pathPoints[secondLastIdx].x;
+              let dy = pathPoints[lastIdx].y - pathPoints[secondLastIdx].y;
+              directionTheta = Math.atan2(dy, dx);
+            } else {
+              directionTheta = yaw * Math.PI / 180;
+            }
+            
+            // 2) Use the current robot position as the base for the detour.
+            let baseX = posX;
+            let baseY = posY;
+            
+            // Distances for the back-left-forward-right maneuver.
+            let backDistance   = 6.0;
+            let lateralOffset  = 6.0;
+            let frontDistance  = 6.0;
+            let diagDistance   = 8.49;
+            let finalAngle     = directionTheta + Math.PI / 4;
+            
+            // 3) Calculate the new detour points:
+            //    a) Backward (reverse in the current travel direction)
+            let backPoint = {
+              x: baseX - backDistance * Math.cos(directionTheta),
+              y: baseY - backDistance * Math.sin(directionTheta)
+            };
+            //    b) Left: perpendicular to the travel direction.
+            let leftPoint = {
+              x: baseX + lateralOffset * Math.sin(directionTheta),
+              y: baseY - lateralOffset * Math.cos(directionTheta)
+            };
+            //    c) Forward from the left point (along the original direction)
+            let forwardPoint = {
+              x: leftPoint.x + frontDistance * Math.cos(directionTheta),
+              y: leftPoint.y + frontDistance * Math.sin(directionTheta)
+            };
+            //    d) Diagonal right turn.
+            let angledRight = {
+              x: forwardPoint.x + diagDistance * Math.cos(finalAngle),
+              y: forwardPoint.y + diagDistance * Math.sin(finalAngle)
+            };
+            
+            // Set the new detour route and reset the index.
+            detourRoute = [backPoint, leftPoint, forwardPoint, angledRight];
+            detourIndex = 0;
+            inDetour = true;
+            targetX = detourRoute[0].x;
+            targetY = detourRoute[0].y;
+            console.log("Simulation obstacle detected. New detour route:", detourRoute);
+          }
+        }
+      });
+      
+      drawPosition();
+    </script>
+  </body>
+</html>
