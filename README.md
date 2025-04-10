@@ -31,10 +31,12 @@ You may install them via `platformio.ini` or the PlatformIO library manager.
 ### File Structure
 
 ```
-📁 main/
-├── main_controller.ino       # Main ESP32 (balancing, motor control, BLE)
-├── lidar_node.ino            # Lidar ESP32 (obstacle detection)
+📁 src/
+├── main.cpp                # Main ESP32 (balancing, motor control, BLE)
+├── main_ld06.cpp            # Lidar ESP32 (obstacle detection)
+📁 visualisation/
 ├── index.html                # UI interface for local host
+📁 include/
 └── lib/
     └── (all supporting libraries)
 ```
@@ -42,14 +44,14 @@ You may install them via `platformio.ini` or the PlatformIO library manager.
 ## How to Run the Code
 
 ### 1. Main Controller (ESP32 #1)
-Upload `main_controller.ino` to the ESP32 responsible for:
+Upload `main.cpp` to the ESP32 responsible for:
 - Balancing control
 - PID loop with motor actuation
 - Receiving Bluetooth commands (via Dabble App)
 - Obeying obstacle avoidance signals from LiDAR ESP32
 
 ### 2. LiDAR ESP32 (ESP32 #2)
-Upload `lidar_node.ino` to the second ESP32. This module:
+Upload `main_ld06.cpp` to the second ESP32. This module:
 - Processes data from the LD06 LiDAR sensor
 - Sends real-time obstacle data to the main ESP32
 - Avoids paths with obstacles within a configurable angle range
