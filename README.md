@@ -6,6 +6,11 @@ This project features a two-wheel self-balancing robot built on the ESP32 platfo
 
 The system includes two ESP32 modules: one for core control logic (motor actuation, PID balancing, BLE interface) and another for LiDAR processing and obstacle detection. The robot supports both manual Bluetooth-based control and autonomous path-following toward given coordinates.
 
+## Acknowledgements
+
+This project was developed with assistance from artificial intelligence tools, including OpenAI's ChatGPT for code suggestions, debugging support, and documentation refinement.
+
+
 ## User Installation Instructions
 
 ### Prerequisites
